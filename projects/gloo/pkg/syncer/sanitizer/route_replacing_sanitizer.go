@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"sort"
+	"strings"
 
 	envoy_config_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_config_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -302,10 +303,14 @@ func (s *RouteReplacingSanitizer) erroredRoutes(
 ) map[string]struct{} {
 	erroredRoutes := make(map[string]struct{})
 	for _, report := range virtualServiceReports {
-		re := regexp.MustCompile("Route Error.+Route Name: (.*)")
-		match := re.FindStringSubmatch(report.Errors.Error())
-		if match != nil {
-			erroredRoutes[match[1]] = struct{}{}
+		// Break out multiple errors which are seperated by ;
+		errors := strings.Split(report.Errors.Error(), ";")
+		for _, vsError := range errors {
+			re := regexp.MustCompile("Route Error.+Route Name: (.*)")
+			match := re.FindStringSubmatch(vsError)
+			if match != nil {
+				erroredRoutes[match[1]] = struct{}{}
+			}
 		}
 	}
 	return erroredRoutes
