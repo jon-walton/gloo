@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"context"
+	"regexp"
 	"sort"
 
 	envoy_config_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -175,7 +176,10 @@ func (s *RouteReplacingSanitizer) SanitizeSnapshot(
 	// mark all valid destination clusters
 	validClusters := getClusters(glooSnapshot)
 
-	replacedRouteConfigs, needsListener := s.replaceMissingClusterRoutes(ctx, validClusters, routeConfigs)
+	virtualServiceReports := reports.ReportsByKind("*v1.VirtualService")
+	erroredRouteNames := s.erroredRoutes(virtualServiceReports)
+
+	replacedRouteConfigs, needsListener := s.replaceRoutes(ctx, validClusters, routeConfigs, erroredRouteNames)
 
 	clusters := xdsSnapshot.GetResources(resource.ClusterTypeV3)
 	listeners := xdsSnapshot.GetResources(resource.ListenerTypeV3)
@@ -229,16 +233,18 @@ func getClusters(snap *v1.ApiSnapshot) map[string]struct{} {
 	return validClusters
 }
 
-func (s *RouteReplacingSanitizer) replaceMissingClusterRoutes(
+func (s *RouteReplacingSanitizer) replaceRoutes(
 	ctx context.Context,
 	validClusters map[string]struct{},
 	routeConfigs []*envoy_config_route_v3.RouteConfiguration,
+	erroredRoutes map[string]struct{},
 ) ([]*envoy_config_route_v3.RouteConfiguration, bool) {
 	var sanitizedRouteConfigs []*envoy_config_route_v3.RouteConfiguration
 
-	isInvalid := func(cluster string) bool {
-		_, ok := validClusters[cluster]
-		return !ok
+	isInvalid := func(cluster string, name string) bool {
+		_, valid := validClusters[cluster]
+		_, errored := erroredRoutes[name]
+		return !valid || errored
 	}
 
 	debugW := contextutils.LoggerFrom(ctx).Debugw
@@ -258,7 +264,7 @@ func (s *RouteReplacingSanitizer) replaceMissingClusterRoutes(
 				}
 				switch action := routeAction.GetClusterSpecifier().(type) {
 				case *envoy_config_route_v3.RouteAction_Cluster:
-					if isInvalid(action.Cluster) {
+					if isInvalid(action.Cluster, route.Name) {
 						debugW("replacing route in virtual host with invalid cluster",
 							zap.Any("cluster", action.Cluster), zap.Any("route", j), zap.Any("virtualhost", i))
 						action.Cluster = s.fallbackCluster.Name
@@ -267,7 +273,7 @@ func (s *RouteReplacingSanitizer) replaceMissingClusterRoutes(
 					}
 				case *envoy_config_route_v3.RouteAction_WeightedClusters:
 					for _, weightedCluster := range action.WeightedClusters.GetClusters() {
-						if isInvalid(weightedCluster.GetName()) {
+						if isInvalid(weightedCluster.GetName(), route.Name) {
 							debugW("replacing route in virtual host with invalid weighted cluster",
 								zap.Any("cluster", weightedCluster.GetName()), zap.Any("route", j), zap.Any("virtualhost", i))
 
@@ -289,6 +295,20 @@ func (s *RouteReplacingSanitizer) replaceMissingClusterRoutes(
 	}
 
 	return sanitizedRouteConfigs, anyRoutesReplaced
+}
+
+func (s *RouteReplacingSanitizer) erroredRoutes(
+	virtualServiceReports []reporter.Report,
+) map[string]struct{} {
+	erroredRoutes := make(map[string]struct{})
+	for _, report := range virtualServiceReports {
+		re := regexp.MustCompile("Route Error.+Route Name: (.*)")
+		match := re.FindStringSubmatch(report.Errors.Error())
+		if match != nil {
+			erroredRoutes[match[1]] = struct{}{}
+		}
+	}
+	return erroredRoutes
 }
 
 func (s *RouteReplacingSanitizer) insertFallbackListener(listeners *envoycache.Resources) {

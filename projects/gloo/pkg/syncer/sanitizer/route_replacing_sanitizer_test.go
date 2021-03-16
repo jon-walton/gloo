@@ -10,6 +10,8 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/rotisserie/eris"
+	gatewayv1 "github.com/solo-io/gloo/projects/gateway/pkg/api/v1"
 	v1 "github.com/solo-io/gloo/projects/gloo/pkg/api/v1"
 	"github.com/solo-io/gloo/projects/gloo/pkg/translator"
 	"github.com/solo-io/gloo/projects/gloo/pkg/utils"
@@ -138,6 +140,30 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 				}},
 			}},
 		}
+
+		erroredRouteName = "route-identifier-1"
+
+		erroredRoute = &envoy_config_route_v3.Route{
+			Name: erroredRouteName,
+			Action: &envoy_config_route_v3.Route_Route{
+				Route: &envoy_config_route_v3.RouteAction{
+					ClusterSpecifier: &envoy_config_route_v3.RouteAction_Cluster{
+						Cluster: clusterName,
+					},
+				},
+			},
+		}
+
+		fixedErroredRoute = &envoy_config_route_v3.Route{
+			Name: erroredRouteName,
+			Action: &envoy_config_route_v3.Route_Route{
+				Route: &envoy_config_route_v3.RouteAction{
+					ClusterSpecifier: &envoy_config_route_v3.RouteAction_Cluster{
+						Cluster: fallbackClusterName,
+					},
+				},
+			},
+		}
 	)
 	BeforeEach(func() {
 		var err error
@@ -226,5 +252,69 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 		Expect(sanitizedRoutes.ResourceProto()).To(Equal(expectedRoutes))
 		Expect(listenersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackListener))
 		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
+	})
+	It("replaces routes that have errored", func() {
+		routeCfg := &envoy_config_route_v3.RouteConfiguration{
+			Name: routeCfgName,
+			VirtualHosts: []*envoy_config_route_v3.VirtualHost{
+				{
+					Routes: []*envoy_config_route_v3.Route{
+						erroredRoute,
+					},
+				},
+			},
+		}
+		expectedRoutes := &envoy_config_route_v3.RouteConfiguration{
+			Name: routeCfgName,
+			VirtualHosts: []*envoy_config_route_v3.VirtualHost{
+				{
+					Routes: []*envoy_config_route_v3.Route{
+						fixedErroredRoute,
+					},
+				},
+			},
+		}
+
+		reports := reporter.ResourceReports{
+			&gatewayv1.VirtualService{}: {
+				Errors: eris.Errorf("Route Error: xya. Reason: plugin. Route Name: %s", erroredRouteName),
+			},
+		}
+
+		xdsSnapshot := xds.NewSnapshotFromResources(
+			envoycache.NewResources("", nil),
+			envoycache.NewResources("", nil),
+			envoycache.NewResources("routes", []envoycache.Resource{
+				resource.NewEnvoyResource(routeCfg),
+			}),
+			envoycache.NewResources("listeners", []envoycache.Resource{
+				resource.NewEnvoyResource(listener),
+			}),
+		)
+
+		sanitizer, err := NewRouteReplacingSanitizer(invalidCfgPolicy)
+		Expect(err).NotTo(HaveOccurred())
+
+		glooSnapshot := &v1.ApiSnapshot{
+			Upstreams: v1.UpstreamList{us},
+		}
+
+		snap, err := sanitizer.SanitizeSnapshot(context.TODO(), glooSnapshot, xdsSnapshot, reports)
+		Expect(err).NotTo(HaveOccurred())
+
+		routeCfgs := snap.GetResources(resource.RouteTypeV3)
+		listeners := snap.GetResources(resource.ListenerTypeV3)
+		clusters := snap.GetResources(resource.ClusterTypeV3)
+
+		sanitizedRoutes := routeCfgs.Items[routeCfg.GetName()]
+		listenersWithFallback := listeners.Items[fallbackListenerName]
+		clustersWithFallback := clusters.Items[fallbackClusterName]
+
+		Expect(sanitizedRoutes.ResourceProto()).To(Equal(expectedRoutes))
+		Expect(listenersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackListener))
+		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
+
+		vsReports := reports.ReportsByKind("*v1.VirtualService")
+		Expect(vsReports[0].Errors.Error()).To(BeNil())
 	})
 })
