@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	envoy_config_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
@@ -275,9 +276,10 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 			},
 		}
 
+		vsResource := &gatewayv1.VirtualService{}
 		reports := reporter.ResourceReports{
-			&gatewayv1.VirtualService{}: {
-				Errors: eris.Errorf("Route Error: xya. Reason: plugin. Route Name: %s", erroredRouteName),
+			vsResource: {
+				Errors: eris.Errorf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName),
 			},
 		}
 
@@ -314,7 +316,8 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 		Expect(listenersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackListener))
 		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
 
-		vsReports := reports.ReportsByKind("*v1.VirtualService")
-		Expect(vsReports[0].Errors.Error()).To(BeNil())
+		// Verify that errors have been turned into warnings
+		Expect(reports[vsResource].Errors).To(BeNil())
+		Expect(reports[vsResource].Warnings).To(Equal([]string{fmt.Sprintf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName)}))
 	})
 })

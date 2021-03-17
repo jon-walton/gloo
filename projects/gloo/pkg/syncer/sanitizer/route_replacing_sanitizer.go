@@ -25,6 +25,7 @@ import (
 	"github.com/solo-io/go-utils/contextutils"
 	envoycache "github.com/solo-io/solo-kit/pkg/api/v1/control-plane/cache"
 	"github.com/solo-io/solo-kit/pkg/api/v1/control-plane/resource"
+	"github.com/solo-io/solo-kit/pkg/api/v1/resources"
 	"github.com/solo-io/solo-kit/pkg/api/v2/reporter"
 	"go.opencensus.io/tag"
 	"go.uber.org/zap"
@@ -177,8 +178,8 @@ func (s *RouteReplacingSanitizer) SanitizeSnapshot(
 	// mark all valid destination clusters
 	validClusters := getClusters(glooSnapshot)
 
-	virtualServiceReports := reports.ReportsByKind("*v1.VirtualService")
-	erroredRouteNames := s.erroredRoutes(virtualServiceReports)
+	vsReports := reports.FilterByKind("*v1.VirtualService")
+	erroredRouteNames := s.removeErroredRoutesFromReport(vsReports, reports)
 
 	replacedRouteConfigs, needsListener := s.replaceRoutes(ctx, validClusters, routeConfigs, erroredRouteNames)
 
@@ -298,20 +299,33 @@ func (s *RouteReplacingSanitizer) replaceRoutes(
 	return sanitizedRouteConfigs, anyRoutesReplaced
 }
 
-func (s *RouteReplacingSanitizer) erroredRoutes(
-	virtualServiceReports []reporter.Report,
+func (s *RouteReplacingSanitizer) removeErroredRoutesFromReport(
+	vsReports map[resources.InputResource]reporter.Report,
+	allReports reporter.ResourceReports,
 ) map[string]struct{} {
 	erroredRoutes := make(map[string]struct{})
-	for _, report := range virtualServiceReports {
+	for vs, report := range vsReports {
 		// Break out multiple errors which are seperated by ;
 		errors := strings.Split(report.Errors.Error(), ";")
+		modifiedReport := report
+		remainingErrors := make([]string, 0)
 		for _, vsError := range errors {
+
 			re := regexp.MustCompile("Route Error.+Route Name: (.*)")
 			match := re.FindStringSubmatch(vsError)
 			if match != nil {
 				erroredRoutes[match[1]] = struct{}{}
+				modifiedReport.Warnings = append(modifiedReport.Warnings, vsError)
+			} else {
+				remainingErrors = append(remainingErrors, vsError)
 			}
 		}
+		if len(remainingErrors) > 0 {
+			modifiedReport.Errors = eris.Errorf(strings.Join(remainingErrors, "; "))
+		} else {
+			modifiedReport.Errors = nil
+		}
+		allReports[vs] = modifiedReport
 	}
 	return erroredRoutes
 }
