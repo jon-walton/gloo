@@ -4,7 +4,6 @@ import (
 	"context"
 	"regexp"
 	"sort"
-	"strings"
 
 	envoy_config_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_config_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -15,6 +14,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/hashicorp/go-multierror"
 	"github.com/rotisserie/eris"
 	"github.com/solo-io/gloo/pkg/utils"
 	v1 "github.com/solo-io/gloo/projects/gloo/pkg/api/v1"
@@ -178,8 +178,8 @@ func (s *RouteReplacingSanitizer) SanitizeSnapshot(
 	// mark all valid destination clusters
 	validClusters := getClusters(glooSnapshot)
 
-	vsReports := reports.FilterByKind("*v1.VirtualService")
-	erroredRouteNames := s.removeErroredRoutesFromReport(vsReports, reports)
+	proxyReports := reports.FilterByKind("*v1.Proxy")
+	erroredRouteNames := s.removeErroredRoutesFromReport(proxyReports, reports)
 
 	replacedRouteConfigs, needsListener := s.replaceRoutes(ctx, validClusters, routeConfigs, erroredRouteNames)
 
@@ -300,32 +300,36 @@ func (s *RouteReplacingSanitizer) replaceRoutes(
 }
 
 func (s *RouteReplacingSanitizer) removeErroredRoutesFromReport(
-	vsReports map[resources.InputResource]reporter.Report,
+	proxyReports map[resources.InputResource]reporter.Report,
 	allReports reporter.ResourceReports,
 ) map[string]struct{} {
 	erroredRoutes := make(map[string]struct{})
-	for vs, report := range vsReports {
+	for proxy, report := range proxyReports {
 		// Break out multiple errors which are seperated by ;
-		errors := strings.Split(report.Errors.Error(), ";")
+		errors := report.Errors.(*multierror.Error).Errors
 		modifiedReport := report
-		remainingErrors := make([]string, 0)
-		for _, vsError := range errors {
-
+		remainingErrors := make([]error, 0)
+		for _, proxyError := range errors {
 			re := regexp.MustCompile("Route Error.+Route Name: (.*)")
-			match := re.FindStringSubmatch(vsError)
+			proxyErrorStr := proxyError.Error()
+			match := re.FindStringSubmatch(proxyErrorStr)
 			if match != nil {
 				erroredRoutes[match[1]] = struct{}{}
-				modifiedReport.Warnings = append(modifiedReport.Warnings, vsError)
+				modifiedReport.Warnings = append(modifiedReport.Warnings, proxyErrorStr)
 			} else {
-				remainingErrors = append(remainingErrors, vsError)
+				remainingErrors = append(remainingErrors, proxyError)
 			}
 		}
 		if len(remainingErrors) > 0 {
-			modifiedReport.Errors = eris.Errorf(strings.Join(remainingErrors, "; "))
+			var multiErr *multierror.Error
+			for _, remainingError := range remainingErrors {
+				multiErr = multierror.Append(multiErr, remainingError)
+			}
+			modifiedReport.Errors = multiErr
 		} else {
 			modifiedReport.Errors = nil
 		}
-		allReports[vs] = modifiedReport
+		allReports[proxy] = modifiedReport
 	}
 	return erroredRoutes
 }
