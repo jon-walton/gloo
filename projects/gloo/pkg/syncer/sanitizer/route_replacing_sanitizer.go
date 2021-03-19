@@ -25,7 +25,6 @@ import (
 	"github.com/solo-io/go-utils/contextutils"
 	envoycache "github.com/solo-io/solo-kit/pkg/api/v1/control-plane/cache"
 	"github.com/solo-io/solo-kit/pkg/api/v1/control-plane/resource"
-	"github.com/solo-io/solo-kit/pkg/api/v1/resources"
 	"github.com/solo-io/solo-kit/pkg/api/v2/reporter"
 	"go.opencensus.io/tag"
 	"go.uber.org/zap"
@@ -300,12 +299,16 @@ func (s *RouteReplacingSanitizer) replaceRoutes(
 }
 
 func (s *RouteReplacingSanitizer) removeErroredRoutesFromReport(
-	proxyReports map[resources.InputResource]reporter.Report,
+	proxyReports reporter.ResourceReports,
 	allReports reporter.ResourceReports,
 ) map[string]struct{} {
 	erroredRoutes := make(map[string]struct{})
 	for proxy, report := range proxyReports {
-		// Break out multiple errors which are seperated by ;
+		if report.Errors == nil {
+			continue
+		}
+
+		// Break out multiple errors
 		errors := report.Errors.(*multierror.Error).Errors
 		modifiedReport := report
 		remainingErrors := make([]error, 0)

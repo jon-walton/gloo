@@ -9,10 +9,10 @@ import (
 	envoy_config_route_v3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	"github.com/hashicorp/go-multierror"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/rotisserie/eris"
-	gatewayv1 "github.com/solo-io/gloo/projects/gateway/pkg/api/v1"
 	v1 "github.com/solo-io/gloo/projects/gloo/pkg/api/v1"
 	"github.com/solo-io/gloo/projects/gloo/pkg/translator"
 	"github.com/solo-io/gloo/projects/gloo/pkg/utils"
@@ -255,6 +255,11 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
 	})
 	It("replaces routes that have errored", func() {
+		var multiErr *multierror.Error
+		multiErr = multierror.Append(
+			multiErr,
+			eris.Errorf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName),
+		)
 		routeCfg := &envoy_config_route_v3.RouteConfiguration{
 			Name: routeCfgName,
 			VirtualHosts: []*envoy_config_route_v3.VirtualHost{
@@ -276,10 +281,10 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 			},
 		}
 
-		vsResource := &gatewayv1.VirtualService{}
+		proxy := &v1.Proxy{}
 		reports := reporter.ResourceReports{
-			vsResource: {
-				Errors: eris.Errorf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName),
+			proxy: {
+				Errors: multiErr,
 			},
 		}
 
@@ -317,7 +322,7 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
 
 		// Verify that errors have been turned into warnings
-		Expect(reports[vsResource].Errors).To(BeNil())
-		Expect(reports[vsResource].Warnings).To(Equal([]string{fmt.Sprintf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName)}))
+		Expect(reports[proxy].Errors).To(BeNil())
+		Expect(reports[proxy].Warnings).To(Equal([]string{fmt.Sprintf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName)}))
 	})
 })

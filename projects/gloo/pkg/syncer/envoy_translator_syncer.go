@@ -151,7 +151,7 @@ func (s *translatorSyncer) syncEnvoy(ctx context.Context, snap *v1.ApiSnapshot, 
 			logger.Infof("successfully updated EDS information for proxy %v", proxy.Metadata.Ref().Key())
 		}
 
-		// Merge reorts after sanitization to capture changes made by the sanitizers
+		// Merge reports after sanitization to capture changes made by the sanitizers
 		allReports.Merge(reports)
 
 		if err := s.xdsCache.SetSnapshot(key, sanitizedSnapshot); err != nil {
