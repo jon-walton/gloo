@@ -192,10 +192,7 @@ func (s *validator) ValidateProxy(ctx context.Context, req *validation.ProxyVali
 		sanitizer.NewUpstreamRemovingSanitizer(),
 		routeReplacingSanitizer,
 	}
-	_, sanitizationErr := xdsSanitizer.SanitizeSnapshot(ctx, &snapCopy, xdsSnapshot, resourceReports)
-	if sanitizationErr != nil {
-		return nil, sanitizationErr
-	}
+	xdsSanitizer.SanitizeSnapshot(ctx, &snapCopy, xdsSnapshot, resourceReports)
 
 	routeErrorToWarnings(resourceReports, report)
 
@@ -211,9 +208,12 @@ func routeErrorToWarnings(resourceReport reporter.ResourceReports, validationRep
 	resourceReportErrors := make(map[string]struct{})
 	resourceReportWarnings := make(map[string]struct{})
 	for _, report := range resourceReport {
-		for _, rError := range report.Errors.(*multierror.Error).Errors {
-			resourceReportErrors[rError.Error()] = struct{}{}
+		if report.Errors != nil {
+			for _, rError := range report.Errors.(*multierror.Error).Errors {
+				resourceReportErrors[rError.Error()] = struct{}{}
+			}
 		}
+
 		for _, rWarning := range report.Warnings {
 			resourceReportWarnings[rWarning] = struct{}{}
 		}
