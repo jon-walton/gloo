@@ -9,6 +9,8 @@ import (
 	"go.uber.org/multierr"
 )
 
+var WrappedRouteErrorMsg = "Route Validation Failed"
+
 func MakeReport(proxy *v1.Proxy) *validation.ProxyReport {
 	listeners := proxy.GetListeners()
 	listenerReports := make([]*validation.ListenerReport, len(listeners))
@@ -88,7 +90,8 @@ func GetVirtualHostErr(virtualHost *validation.VirtualHostReport) []error {
 func GetRouteErr(route *validation.RouteReport) []error {
 	var errs []error
 	for _, errReport := range route.GetErrors() {
-		errs = append(errs, mkErr("Route", errReport.Type.String(), errReport.Reason))
+		wrappedErr := errors.Wrap(mkErr("Route", errReport.Type.String(), errReport.Reason), WrappedRouteErrorMsg)
+		errs = append(errs, wrappedErr)
 	}
 	return errs
 }
