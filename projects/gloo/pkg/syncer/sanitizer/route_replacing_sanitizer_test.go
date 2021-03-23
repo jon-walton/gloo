@@ -16,6 +16,7 @@ import (
 	v1 "github.com/solo-io/gloo/projects/gloo/pkg/api/v1"
 	"github.com/solo-io/gloo/projects/gloo/pkg/translator"
 	"github.com/solo-io/gloo/projects/gloo/pkg/utils"
+	validationutils "github.com/solo-io/gloo/projects/gloo/pkg/utils/validation"
 	"github.com/solo-io/gloo/projects/gloo/pkg/xds"
 	envoycache "github.com/solo-io/solo-kit/pkg/api/v1/control-plane/cache"
 	"github.com/solo-io/solo-kit/pkg/api/v1/control-plane/resource"
@@ -256,9 +257,10 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 	})
 	It("replaces routes that have errored", func() {
 		var multiErr *multierror.Error
+		baseError := eris.Errorf("Route Error: abc. Reason: plugin. %s: %s", translator.RouteIdentifierTxt, erroredRouteName)
 		multiErr = multierror.Append(
 			multiErr,
-			eris.Errorf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName),
+			eris.Wrap(baseError, validationutils.WrappedRouteErrorMsg),
 		)
 		routeCfg := &envoy_config_route_v3.RouteConfiguration{
 			Name: routeCfgName,
@@ -322,7 +324,8 @@ var _ = Describe("RouteReplacingSanitizer", func() {
 		Expect(clustersWithFallback.ResourceProto()).To(Equal(sanitizer.fallbackCluster))
 
 		// Verify that errors have been turned into warnings
+		expectedError := fmt.Sprintf("%s: Route Error: abc. Reason: plugin. %s: %s", validationutils.WrappedRouteErrorMsg, translator.RouteIdentifierTxt, erroredRouteName)
 		Expect(reports[proxy].Errors).To(BeNil())
-		Expect(reports[proxy].Warnings).To(Equal([]string{fmt.Sprintf("Route Error: abc. Reason: plugin. Route Name: %s", erroredRouteName)}))
+		Expect(reports[proxy].Warnings).To(Equal([]string{expectedError}))
 	})
 })
